@@ -35,7 +35,7 @@ func NewInitCommand() cli.Command {
 		Usage:       "Create Certificate Authority",
 		Description: "Create Certificate Authority, including certificate, key and extra information file.",
 		Flags: []cli.Flag{
-			cli.StringFlag{"passphrase", "", "Passphrase to encrypt private-key PEM block", ""},
+			cli.StringFlag{"passphrase", "", "Passphrase to encrypt private-key PEM block, if not reading a key", ""},
 			cli.IntFlag{"key-bits", 4096, "Bit size of RSA keypair to generate", ""},
 			cli.IntFlag{"years", 10, "How long until the CA certificate expires", ""},
 			cli.StringFlag{"organization", "", "CA Certificate organization", ""},
@@ -67,26 +67,31 @@ func initAction(c *cli.Context) {
 
 	var passphrase []byte
 	var err error
-	if c.IsSet("passphrase") {
-		passphrase = []byte(c.String("passphrase"))
-	} else {
-		passphrase, err = createPassPhrase()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-	}
 
 	var key *pkix.Key
 	if c.IsSet("key") {
 		keyBytes, err := ioutil.ReadFile(c.String("key"))
 		key, err = pkix.NewKeyFromPrivateKeyPEM(keyBytes)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Read Key error:", err)
-			os.Exit(1)
+			passphrase = askPassPhrase(c.String("key"))
+			key, err = pkix.NewKeyFromEncryptedPrivateKeyPEM(keyBytes, passphrase)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Read Key error:", err)
+				os.Exit(1)
+			}
 		}
-		fmt.Printf("Read %s.key\n", key)
+		fmt.Printf("Read %s, will copy to %s.key\n", c.String("key"), formattedName)
 	} else {
+		if c.IsSet("passphrase") {
+			passphrase = []byte(c.String("passphrase"))
+		} else {
+			passphrase, err = createPassPhrase()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+
 		key, err = pkix.CreateRSAKey(c.Int("key-bits"))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Create RSA Key error:", err)
@@ -120,6 +125,7 @@ func initAction(c *cli.Context) {
 	if err = depot.PutCertificate(d, formattedName, crt); err != nil {
 		fmt.Fprintln(os.Stderr, "Save certificate error:", err)
 	}
+
 	if len(passphrase) > 0 {
 		if err = depot.PutEncryptedPrivateKey(d, formattedName, key, passphrase); err != nil {
 			fmt.Fprintln(os.Stderr, "Save encrypted private key error:", err)

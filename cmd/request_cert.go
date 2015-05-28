@@ -35,7 +35,7 @@ func NewCertRequestCommand() cli.Command {
 		Usage:       "Create certificate request for host",
 		Description: "Create certificate for host, including certificate signing request and key.  Must sign the request in order to generate a certificate.",
 		Flags: []cli.Flag{
-			cli.StringFlag{"passphrase", "", "Passphrase to encrypt private-key PEM block", ""},
+			cli.StringFlag{"passphrase", "", "Passphrase to encrypt private-key PEM block, if not reading a key", ""},
 			cli.StringFlag{"ip", "", "IP address of the host", ""},
 			cli.IntFlag{"key-bits", 2048, "Bit size of RSA keypair to generate", ""},
 			cli.StringFlag{"domain", "", "Use domain instead of IP address for SAN", ""},
@@ -83,26 +83,31 @@ func newCertAction(c *cli.Context) {
 
 	var passphrase []byte
 	var err error
-	if c.IsSet("passphrase") {
-		passphrase = []byte(c.String("passphrase"))
-	} else {
-		passphrase, err = createPassPhrase()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-	}
 
 	var key *pkix.Key
 	if c.IsSet("key") {
 		keyBytes, err := ioutil.ReadFile(c.String("key"))
 		key, err = pkix.NewKeyFromPrivateKeyPEM(keyBytes)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "Read Key error:", err)
-			os.Exit(1)
+			passphrase = askPassPhrase(c.String("key"))
+			key, err = pkix.NewKeyFromEncryptedPrivateKeyPEM(keyBytes, passphrase)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Read Key error:", err)
+				os.Exit(1)
+			}
 		}
-		fmt.Printf("Read %s.key\n", name)
+		fmt.Printf("Read %s, will copy to %s.key\n", c.String("key"), formattedName)
 	} else {
+		if c.IsSet("passphrase") {
+			passphrase = []byte(c.String("passphrase"))
+		} else {
+			passphrase, err = createPassPhrase()
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+		}
+
 		key, err = pkix.CreateRSAKey(c.Int("key-bits"))
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "Create RSA Key error:", err)
@@ -136,6 +141,7 @@ func newCertAction(c *cli.Context) {
 	if err = depot.PutCertificateSigningRequest(d, formattedName, csr); err != nil {
 		fmt.Fprintln(os.Stderr, "Save certificate request error:", err)
 	}
+
 	if len(passphrase) > 0 {
 		if err = depot.PutEncryptedPrivateKey(d, formattedName, key, passphrase); err != nil {
 			fmt.Fprintln(os.Stderr, "Save encrypted private key error:", err)
